@@ -1,16 +1,30 @@
 ''' Questions: 
-    - How is k defined?
-    - How are the generators g1, g2, g3, h0 chosen? and by whom?
-    - How is the session key K derived from gᵃᵇ, and what is E_K?
-    - How should the signatures be made? Who is signing?
+    - How is the k involved in the encryption of messages?
+    - What does Alice do with E_k(sig(gb, ga)) and what does Bob do with E_k(sig(ga, gb))?
+
+    - What if the answers to the questions were not numbers but words or sentences? How would the protocol change? 
+        - Hashing so that they are all the same size (q or less)
+
+The next steps:
+
+    - UNderstand the encryption algo (Shaw 1 or 256), understand the hashing algorithm (AES), and signture algorithm (Ed25519)
+    - Eventually implement the signature ourselves
+    - Add commments to the main() function which shows wthat steps and what can be seen by whom and why
+    - Create a game-like scenario where you pick what to do in the interaction between Bob and Alice, and Eve is spying and you lose when she is able to find information or 
+    she succesfully fools you (you make a mistake, forget to do a certain step, or accidentally accept her encrypted message)
 '''
 
 ''' Scenario: Alice holds the answer key commited inside her credential. Bob is a student who wants to check wether his answer to question 2 is correct or not without Alice having
 to reveal the correct answer and without exposing Bob's answer if it's wrong. He learns exactly one bit of information; wether he is right or wrong.  
 '''
+
 from typing import List
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
 import hashlib
 import secrets
+import os
 
 try:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -42,13 +56,13 @@ def _is_probable_prime(n: int, rounds: int = 40) -> bool:
             return False
     return True
 
-
 def _gen_prime(bits: int) -> int:
     while True:
         c = secrets.randbits(bits) | (1 << (bits - 1)) | 1
         if _is_probable_prime(c):
             return c
 
+# Should this be a hashing function instead? Since it is not totally "safe"
 def _subgroup_generator(p: int, q: int) -> int:
     """An element of order q: take any h to the power (p-1)/q; retry if it lands on 1."""
     cofactor = (p - 1) // q
@@ -69,7 +83,7 @@ def generate_parameters(q_bits: int = 160):
         p = r * q + 1
         if _is_probable_prime(p):
             break
-    g = _subgroup_generator(p, q)
+    g = _subgroup_generator(p, q) 
     g1 = _subgroup_generator(p, q)
     g2 = _subgroup_generator(p, q)
     g3 = _subgroup_generator(p, q)
@@ -77,7 +91,7 @@ def generate_parameters(q_bits: int = 160):
     return p, q, g, g1, g2, g3, h0
 
 def _canon(x: int, p: int) -> bytes:
-    """Canonical fixed-width serialization — both signer and verifier MUST match."""
+    """Canonical fixed-width serialization - both signer and verifier MUST match."""
     return x.to_bytes((p.bit_length() + 7) // 8, "big")
 
 class Protocol:
@@ -98,16 +112,6 @@ class Protocol:
                 return f"{name} is not a generator of the subgroup of order q"
         return "All generators are valid"
 
-def derive_challenge(proto: Protocol, cred: int, W: int, ga: int, gb: int) -> int:
-    """Non-interactive Fiat-Shamir challenge over the PUBLIC transcript.
-    Alice and Bob both compute the same k. (Interactive alternative: Bob picks a
-    random k and sends it as a message.) Never include any secret here."""
-    h = hashlib.sha256()
-    for v in (proto.p, proto.q, cred, W, ga, gb):
-        h.update(_canon(v, proto.p))
-    k = int.from_bytes(h.digest(), "big") % proto.q
-    return k or 1 
-
 class Issuer:
     def __init__(self) -> None:
         if not _HAVE_CRYPTO:
@@ -115,9 +119,31 @@ class Issuer:
         self.sk = Ed25519PrivateKey.generate()
         self.pk = self.sk.public_key()
 
-    def sign_credential(self, cred: int, p: int) -> bytes:
+    def sign_credential(self, cred: int, p: int) -> bytes: 
         return self.sk.sign(_canon(cred, p))
+    
+    def _sign_credentials(self, message_1, message_2, p: int) -> bytes:
+        message = _canon(message_1, p) + _canon(message_2, p)
+        return self.sk.sign(message)
 
+    
+def derive_key(K: int, p: int) -> bytes:
+    """Map the shared DH secret K (a group element) to a 32-byte AES key."""
+    return HKDF(algorithm=hashes.SHA256(), length=32,
+                salt=None, info=b"session-key").derive(_canon(K, p))
+
+class Encryption:
+    def __init__(self, K: int, p: int) -> None:
+        self.aes = AESGCM(derive_key(K, p))
+
+    def encrypt(self, text: bytes) -> bytes:
+        nonce = os.urandom(12)
+        cipher_text = self.aes.encrypt(nonce, text, None)
+        return nonce + cipher_text
+
+    def decrypt(self, blob: bytes):
+        nonce, ct = blob[:12], blob[12:]
+        return self.aes.decrypt(nonce, ct, None)
 
 class Alice:
     def __init__(self, protocol: Protocol, x1: int, x2: int, x3: int,
@@ -193,7 +219,7 @@ if __name__ == "__main__":
     proto = Protocol(p, q, g1, g2, g3, h0)
     print(proto.check_generators())
 
-    correct_x2 = 42
+    correct_x2 = 42 # Hash
     alpha = secrets.randbelow(q)
     a = secrets.randbelow(q)
     alice = Alice(proto, x1=7, x2=correct_x2, x3=99, alpha=alpha, a=a, g=g)
@@ -209,14 +235,33 @@ if __name__ == "__main__":
         if _HAVE_CRYPTO:
             assert bob.verify_credential(alice.cred, cred_sig, issuer.pk), "bad cred sig"
 
-        K_a = alice.compute_session_key(bob.gb)
+        K = alice.compute_session_key(bob.gb)
         K_b = bob.compute_session_key(alice.ga)
-        assert K_a == K_b, "DH key disagreement"
+        assert K == K_b, "DH key disagreement"
+
+        cipher = Encryption(K, p)
+
+        sig_b = issuer._sign_credentials(bob.gb, alice.ga, p)
+        blob_B = cipher.encrypt(sig_b)
+
+        sig_B = cipher.decrypt(blob_B) # Alice is doing this operation because she has the key K!
+
+        message_A = _canon(alice.ga, p) + _canon(bob.gb, p)
+        sig_a = alice.sk.sign(message_A)
+        blob_A = cipher.encrypt(sig_a)
 
         w1, w3, w4 = (secrets.randbelow(q) for _ in range(3))
         W = alice.compute_mask_commitment(w1, w3, w4)
-        k = derive_challenge(proto, alice.cred, W, alice.ga, bob.gb)
-        r1, r3, r4 = alice.compute_response(k, w1, w3, w4)
+        r1, r3, r4 = alice.compute_response(K, w1, w3, w4)
 
-        result = bob.verify_response(alice.cred, k, W, r1, r3, r4)
+        result = bob.verify_response(alice.cred, K, W, r1, r3, r4)
         print(f"Bob's answer {label}: verification = {result}")
+
+        if result:
+            encrypted_result = cipher.encrypt(bytes(bob_answer))
+            
+            #Alice decrypting
+            decrypted_result = cipher.decrypt(encrypted_result)
+            print(f"Message from Alice: You have the correct answer {correct_x2}. Bob! Well done :)")
+        else:
+            print(f"Message from Alice: The correct answer was {correct_x2}, not {bob_answer}. Better luck next time :/")
