@@ -1,13 +1,16 @@
 ''' Questions: 
-    - How is the k involved in the encryption of messages?
+    - How is the k involved in the encryption of messages? I am asking because it is E sub k in the page.
     - What does Alice do with E_k(sig(gb, ga)) and what does Bob do with E_k(sig(ga, gb))?
+    - Is k always the diffie-helman shared key?
+    - Is AES-GCM the correct encryption algorithm to use? 
+    - 
 
     - What if the answers to the questions were not numbers but words or sentences? How would the protocol change? 
         - Hashing so that they are all the same size (q or less)
 
 The next steps:
 
-    - UNderstand the encryption algo (Shaw 1 or 256), understand the hashing algorithm (AES), and signture algorithm (Ed25519)
+    - UNderstand the encryption algo (AES), understand the hashing algorithm (Shaw 1 or 256), and signture algorithm (Ed25519)
     - Eventually implement the signature ourselves
     - Add commments to the main() function which shows wthat steps and what can be seen by whom and why
     - Create a game-like scenario where you pick what to do in the interaction between Bob and Alice, and Eve is spying and you lose when she is able to find information or 
@@ -155,7 +158,7 @@ class Alice:
         self.alpha = alpha    # blinding factor
         self.cred = self.compute_credential(x1, x2, x3, alpha)
         self.a = a
-        self.ga = pow(g, self.a, protocol.p)   # FIX: was missing mod p
+        self.ga = pow(g, self.a, protocol.p)
         if _HAVE_CRYPTO:
             self.sk = Ed25519PrivateKey.generate()
             self.pk = self.sk.public_key()
@@ -213,55 +216,81 @@ class Bob:
                * pow(pr.g3, r3, pr.p)
                * pow(pr.h0, r4, pr.p)) % pr.p
         return lhs == rhs
+
+    def sign_transcript(self, gb: int, ga: int) -> bytes:
+        return self.sk.sign(_canon(gb, self.protocol.p) + _canon(ga, self.protocol.p))
+
     
 if __name__ == "__main__":
+    # === SETUP (public) ===
     p, q, g, g1, g2, g3, h0 = generate_parameters()
     proto = Protocol(p, q, g1, g2, g3, h0)
     print(proto.check_generators())
 
-    correct_x2 = 42 # Hash
+    correct_x2 = 42  # TODO: hash the real answer to a field element mod q
     alpha = secrets.randbelow(q)
     a = secrets.randbelow(q)
     alice = Alice(proto, x1=7, x2=correct_x2, x3=99, alpha=alpha, a=a, g=g)
 
-    if _HAVE_CRYPTO:
-        issuer = Issuer()
-        cred_sig = issuer.sign_credential(alice.cred, p)
+    issuer = Issuer()
+    cred_sig = issuer.sign_credential(alice.cred, p)   # EVE SEES cred_sig, alice.cred
 
     for label, bob_answer in (("correct (42)", 42), ("wrong (43)", 43)):
         b = secrets.randbelow(q)
         bob = Bob(proto, b=b, g=g, x2=bob_answer)
 
-        if _HAVE_CRYPTO:
-            assert bob.verify_credential(alice.cred, cred_sig, issuer.pk), "bad cred sig"
+        # --- Bob verifies the credential is authentic ---
+        assert bob.verify_credential(alice.cred, cred_sig, issuer.pk), "bad cred sig"
 
+        # --- Both derive the SAME session key independently (Eve cannot) ---
         K = alice.compute_session_key(bob.gb)
         K_b = bob.compute_session_key(alice.ga)
         assert K == K_b, "DH key disagreement"
+        cipher = Encryption(K, p)   # both sides derive identical AES key from K
 
-        cipher = Encryption(K, p)
+        # --- Message 2 (Bob -> Alice): Bob signs (gb||ga) with HIS key, encrypts ---
+        message_B = _canon(bob.gb, p) + _canon(alice.ga, p)
+        sig_b = bob.sign_transcript(bob.gb, alice.ga) 
+        blob_B = cipher.encrypt(sig_b)                  # EVE SEES ciphertext only
 
-        sig_b = issuer._sign_credentials(bob.gb, alice.ga, p)
-        blob_B = cipher.encrypt(sig_b)
+        # the result is the whole point of the signature is the verify step.
+        sig_b_recovered = cipher.decrypt(blob_B)
+        try:
+            bob.pk.verify(sig_b_recovered, message_B)   # Alice checks it's really Bob
+        except InvalidSignature:
+            print("Bob authentication FAILED — aborting session")
+            break
 
-        sig_B = cipher.decrypt(blob_B) # Alice is doing this operation because she has the key K!
-
+        # --- Message 3 (Alice -> Bob): Alice signs (ga||gb) with HER key, encrypts ---
         message_A = _canon(alice.ga, p) + _canon(bob.gb, p)
-        sig_a = alice.sk.sign(message_A)
-        blob_A = cipher.encrypt(sig_a)
+        sig_a = alice.sign_transcript(alice.ga, bob.gb)
+        blob_A = cipher.encrypt(sig_a)                  # EVE SEES ciphertext only
 
+        # The old code computed blob_A and never used it.
+        sig_a_recovered = cipher.decrypt(blob_A)
+        try:
+            alice.pk.verify(sig_a_recovered, message_A)  # Bob checks it's really Alice
+        except InvalidSignature:
+            print("Alice authentication FAILED — aborting session")
+            break
+
+        # --- The zero-knowledge proof ---
+        # W is committed before k
         w1, w3, w4 = (secrets.randbelow(q) for _ in range(3))
-        W = alice.compute_mask_commitment(w1, w3, w4)
-        r1, r3, r4 = alice.compute_response(K, w1, w3, w4)
+        W = alice.compute_mask_commitment(w1, w3, w4)        # EVE SEES W
 
-        result = bob.verify_response(alice.cred, K, W, r1, r3, r4)
+        k = K
+        r1, r3, r4 = alice.compute_response(k, w1, w3, w4)   # EVE SEES r1, r3, r4
+
+        result = bob.verify_response(alice.cred, k, W, r1, r3, r4)
         print(f"Bob's answer {label}: verification = {result}")
 
+        # --- Message 5 (Bob -> Alice): Bob returns his answer, encrypted under K ---
+        # Use _canon to encode the integer. Direction is Bob -> Alice.
         if result:
-            encrypted_result = cipher.encrypt(bytes(bob_answer))
-            
-            #Alice decrypting
-            decrypted_result = cipher.decrypt(encrypted_result)
-            print(f"Message from Alice: You have the correct answer {correct_x2}. Bob! Well done :)")
+            blob_result = cipher.encrypt(_canon(bob_answer, p))   # Bob sends E_K(answer)
+            recovered = int.from_bytes(cipher.decrypt(blob_result), "big")  # Alice reads it
+            print(f"Message from Alice: Correct, Bob! ({recovered}) Well done :)")
         else:
-            print(f"Message from Alice: The correct answer was {correct_x2}, not {bob_answer}. Better luck next time :/")
+            print(f"Message from Alice: The correct answer was {correct_x2}, "
+                  f"not {bob_answer}. Better luck next time :/")
