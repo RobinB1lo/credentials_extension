@@ -1,28 +1,5 @@
-''' Questions: 
-    - How is the k involved in the encryption of messages? I am asking because it is E sub k in the page.
-    - What does Alice do with E_k(sig(gb, ga)) and what does Bob do with E_k(sig(ga, gb))?
-    - Is k always the diffie-helman shared key?
-    - Is AES-GCM the correct encryption algorithm to use? 
-    - 
-
-    - What if the answers to the questions were not numbers but words or sentences? How would the protocol change? 
-        - Hashing so that they are all the same size (q or less)
-
-The next steps:
-
-    - UNderstand the encryption algo (AES), understand the hashing algorithm (Shaw 1 or 256), and signture algorithm (Ed25519)
-    - Eventually implement the signature ourselves
-    - Add commments to the main() function which shows wthat steps and what can be seen by whom and why
-    - Create a game-like scenario where you pick what to do in the interaction between Bob and Alice, and Eve is spying and you lose when she is able to find information or 
-    she succesfully fools you (you make a mistake, forget to do a certain step, or accidentally accept her encrypted message)
-'''
-
-''' Scenario: Alice holds the answer key commited inside her credential. Bob is a student who wants to check wether his answer to question 2 is correct or not without Alice having
-to reveal the correct answer and without exposing Bob's answer if it's wrong. He learns exactly one bit of information; wether he is right or wrong.  
-'''
-
 from typing import List
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 import hashlib
@@ -131,25 +108,40 @@ class Issuer:
 
     
 def derive_key(K: int, p: int) -> bytes:
-    """Map the shared DH secret K (a group element) to a 32-byte AES key."""
+    """Map the shared DH secret K to a 32-byte AES-256 key."""
     return HKDF(algorithm=hashes.SHA256(), length=32,
                 salt=None, info=b"session-key").derive(_canon(K, p))
 
 class Encryption:
     def __init__(self, K: int, p: int) -> None:
-        self.aes = AESGCM(derive_key(K, p))
+        self.key = derive_key(K, p)  # 32-byte key for AES-256
 
     def encrypt(self, text: bytes) -> bytes:
-        nonce = os.urandom(12)
-        cipher_text = self.aes.encrypt(nonce, text, None)
-        return nonce + cipher_text
+        """Encrypt using AES-256 in CTR mode (no authentication)."""
+        iv = os.urandom(16)  # 16-byte IV for CBC
+        cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv))
+        encryptor = cipher.encryptor()
+        # WARNING: CBC requires padding. Using PKCS7.
+        from cryptography.hazmat.primitives import padding
+        padder = padding.PKCS7(128).padder()
+        padded_text = padder.update(text) + padder.finalize()
+        ciphertext = encryptor.update(padded_text) + encryptor.finalize()
+        return iv + ciphertext  # prepend IV
 
-    def decrypt(self, blob: bytes):
-        nonce, ct = blob[:12], blob[12:]
-        return self.aes.decrypt(nonce, ct, None)
+    def decrypt(self, blob: bytes) -> bytes:
+        """Decrypt using AES-256 in CBC mode (no authentication check)."""
+        iv, ct = blob[:16], blob[16:]
+        cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv))
+        decryptor = cipher.decryptor()
+        padded_text = decryptor.update(ct) + decryptor.finalize()
+        # Remove PKCS7 padding
+        from cryptography.hazmat.primitives import padding
+        unpadder = padding.PKCS7(128).unpadder()
+        return unpadder.update(padded_text) + unpadder.finalize()
+
 
 class Alice:
-    def __init__(self, protocol: Protocol, x1: int, x2: int, x3: int,
+    def __init__(self, protocol: Protocol, x1: int, x2: str, x3: int,
                  alpha: int, a: int, g: int) -> None:
         self.protocol = protocol
         self.x1 = x1          # correct answer to Q1
@@ -221,76 +213,90 @@ class Bob:
         return self.sk.sign(_canon(gb, self.protocol.p) + _canon(ga, self.protocol.p))
 
     
+def answer_to_field(answer: str, q: int) -> int:
+    """Hash a string answer to a field element mod q using SHA-256."""
+    normalized = answer.strip().lower()
+    digest = hashlib.sha256(normalized.encode('utf-8')).digest()
+    return int.from_bytes(digest, "big") % q
+
+
 if __name__ == "__main__":
     # === SETUP (public) ===
-    p, q, g, g1, g2, g3, h0 = generate_parameters()
+    p, q, g, g1, g2, g3, h0 = generate_parameters(q_bits=160)
     proto = Protocol(p, q, g1, g2, g3, h0)
-    print(proto.check_generators())
 
-    correct_x2 = 42  # TODO: hash the real answer to a field element mod q
+    # === Alice's answer (hashed to field) ===
+    correct_answer_str = "send list"
+    correct_x2 = answer_to_field(correct_answer_str, q)  # SHA-256 hash to field
+    
+    # === Consistent-length answers (also hashed) ===
+    x1 = answer_to_field("question1answer", q)
+    x3 = answer_to_field("question3answer", q)
+    
     alpha = secrets.randbelow(q)
     a = secrets.randbelow(q)
-    alice = Alice(proto, x1=7, x2=correct_x2, x3=99, alpha=alpha, a=a, g=g)
+    alice = Alice(proto, x1=x1, x2=correct_x2, x3=x3, alpha=alpha, a=a, g=g)
 
     issuer = Issuer()
-    cred_sig = issuer.sign_credential(alice.cred, p)   # EVE SEES cred_sig, alice.cred
+    cred_sig = issuer.sign_credential(alice.cred, p)
 
-    for label, bob_answer in (("correct (42)", 42), ("wrong (43)", 43)):
+    for label, bob_answer_str in (("correct (send list)", "send list"), 
+                                   ("wrong (send Mike)", "send Mike")):
+        bob_x2 = answer_to_field(bob_answer_str, q)  # Bob hashes his answer
         b = secrets.randbelow(q)
-        bob = Bob(proto, b=b, g=g, x2=bob_answer)
+        bob = Bob(proto, b=b, g=g, x2=bob_x2)
 
-        # --- Bob verifies the credential is authentic ---
+        # --- Bob verifies the credential ---
         assert bob.verify_credential(alice.cred, cred_sig, issuer.pk), "bad cred sig"
 
-        # --- Both derive the SAME session key independently (Eve cannot) ---
+        # --- Both derive session key (Eve cannot) ---
         K = alice.compute_session_key(bob.gb)
         K_b = bob.compute_session_key(alice.ga)
         assert K == K_b, "DH key disagreement"
-        cipher = Encryption(K, p)   # both sides derive identical AES key from K
+        cipher = Encryption(K, p)
 
-        # --- Message 2 (Bob -> Alice): Bob signs (gb||ga) with HIS key, encrypts ---
+        # --- Message 2 (Bob -> Alice) ---
         message_B = _canon(bob.gb, p) + _canon(alice.ga, p)
-        sig_b = bob.sign_transcript(bob.gb, alice.ga) 
-        blob_B = cipher.encrypt(sig_b)                  # EVE SEES ciphertext only
+        sig_b = bob.sign_transcript(bob.gb, alice.ga)
+        blob_B = cipher.encrypt(sig_b)
 
-        # the result is the whole point of the signature is the verify step.
         sig_b_recovered = cipher.decrypt(blob_B)
         try:
-            bob.pk.verify(sig_b_recovered, message_B)   # Alice checks it's really Bob
+            bob.pk.verify(sig_b_recovered, message_B)
         except InvalidSignature:
             print("Bob authentication FAILED — aborting session")
             break
 
-        # --- Message 3 (Alice -> Bob): Alice signs (ga||gb) with HER key, encrypts ---
+        # --- Message 3 (Alice -> Bob) ---
         message_A = _canon(alice.ga, p) + _canon(bob.gb, p)
         sig_a = alice.sign_transcript(alice.ga, bob.gb)
-        blob_A = cipher.encrypt(sig_a)                  # EVE SEES ciphertext only
+        blob_A = cipher.encrypt(sig_a)
 
-        # The old code computed blob_A and never used it.
         sig_a_recovered = cipher.decrypt(blob_A)
         try:
-            alice.pk.verify(sig_a_recovered, message_A)  # Bob checks it's really Alice
+            alice.pk.verify(sig_a_recovered, message_A)
         except InvalidSignature:
             print("Alice authentication FAILED — aborting session")
             break
 
         # --- The zero-knowledge proof ---
-        # W is committed before k
         w1, w3, w4 = (secrets.randbelow(q) for _ in range(3))
-        W = alice.compute_mask_commitment(w1, w3, w4)        # EVE SEES W
+        W = alice.compute_mask_commitment(w1, w3, w4)
 
-        k = K
-        r1, r3, r4 = alice.compute_response(k, w1, w3, w4)   # EVE SEES r1, r3, r4
+        k = hashlib.sha256((_canon(proto.p, p) + _canon(proto.q, p) + 
+                           _canon(alice.cred, p) + _canon(W, p) + 
+                           _canon(alice.ga, p) + _canon(bob.gb, p))).digest()
+        k = int.from_bytes(k, "big") % q
+        
+        r1, r3, r4 = alice.compute_response(k, w1, w3, w4)
 
         result = bob.verify_response(alice.cred, k, W, r1, r3, r4)
         print(f"Bob's answer {label}: verification = {result}")
 
-        # --- Message 5 (Bob -> Alice): Bob returns his answer, encrypted under K ---
-        # Use _canon to encode the integer. Direction is Bob -> Alice.
         if result:
-            blob_result = cipher.encrypt(_canon(bob_answer, p))   # Bob sends E_K(answer)
-            recovered = int.from_bytes(cipher.decrypt(blob_result), "big")  # Alice reads it
-            print(f"Message from Alice: Correct, Bob! ({recovered}) Well done :)")
+            blob_result = cipher.encrypt(_canon(bob_x2, p))
+            recovered = int.from_bytes(cipher.decrypt(blob_result), "big")
+            print(f"Message from Alice: Correct, Bob! Well done :)")
         else:
-            print(f"Message from Alice: The correct answer was {correct_x2}, "
-                  f"not {bob_answer}. Better luck next time :/")
+            print(f"Message from Alice: The correct answer was {correct_answer_str}, "
+                  f"not {bob_answer_str}. Better luck next time :/")

@@ -1,5 +1,7 @@
 # Extension of Digital Credentials
 
+Elementary cryptography concepts
+
 ## What is Diffy-Helman key exchange?
 
 1. Alice and Bob publicly agree to use a modulus p = 23 and base g = 5 
@@ -21,8 +23,7 @@ A blind signature is a digital signature with two important differences. First, 
 
 The following is the RSA digital signature algorithm used to acheive a blind singature: Alice has a message m that she wants Sam to sign, but she doesn't want Sam to learn m. She chooses a random number r and computes m' = mr^e mod n. (The value r unconditionally hides the message m). Alice gives m' to Sam. Sam signes the value m' by computing a conventional RSA signature operation: s' = (m')^d mod n. Sam gives s' to Alice. Alice computes s'(r^-1) mod n = (m')^d(r^-1) = (m^d)(r^ed)(r^-1) = (m^d)(r)(r^-1) = m^d mod n = s. Alice this obtains a valid message-signature pair (m, s) that can be verified by anyone using Sam's public key (e, n) in the familiar RSA signature verification operation: "Is s^e mod n = m?". Note, however, that Same has never seen and cannot compute m or s
 
-## What is a zero-knowledge proof of knowledge?
+## What is a zero-knowledge proof?
 
 Suppose that Alice would like to convince Bob that she knows. a particular value, but she does not want him to learn anything at all about what the value is. A zero-knowledge proof of knowledge for the original discussion of this topic is a cryptographic protocol or technique that allows Alice to prove her knowledge, but to prove it in "zero-knowledge". As an example, sa y = g^x mod p where p is a prime and g is a generator of the q-order subgroyp of Zp*. Bob knows y, g, q, and p, but is unable to compute discrete logarithms modulo p and do does not know the value x. Alice want to convince Bob that she knows x without revealing anything about x to him. This can be accomplished as follows. Alice chooses a random value r exists in Zq and computes t - g^r mod p. She sends t to Bob. Bob chooses a random value c exists in Zq and computes t = g^r mod p. She sends t to Bob/ Bob chooses a random value c exists in Zq. He sends c to Alice. Alice computes s = cx + r mod q and sends s to Bob. Bob checks to see wether g^s mod p is equal to ty^c mod p. If so, he is convinced that Alice must know x, but he learns nothing whatsoever about x.
 
-## Explanation of the paper form Professor Adams
