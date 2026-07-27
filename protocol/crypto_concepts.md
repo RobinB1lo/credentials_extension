@@ -221,7 +221,48 @@ Output: A 64-byte signature (R_encoded || S_encoded) that can be verified by any
 
 - Post quntum cryptography is the design and analysis of cryptographic algorithms which are deemed quantum resistant. Most of these algorithms involve lattices, because they have properties which make them more resistant to quantum attacks.
 
-    - What are quantum computers: 
+    - What are quantum computers: Quantum computers is a computer that represents and processes quantum states. Quantum computation exploit phenomena such as superposition, interference, and entanglement. Quantum computers has the potential to complete some calculations exponentially faster than classical computers.
+
+        - What is a quantum state: In quantum physics, a quantum state is a mathematical entity that represents a physical system. 
+
+## Lattice Cryptography (CRYSTALS; Cryptographic Suite for Algebraic Lattices)
+
+Let A be an n x n matrix, and y be a vector containing n items. The following is an easy problem, and can be solved with simple algebraic inversion:
+
+    - A * y = z mod p, given (A,z), find y 
+
+        - Easy! Simply invert A and multiply by z
+
+Now let's add another vector: e and try a slightly different problem:
+
+    - A * y + e = z mod p, given (A, z) find (y, e) (Note that y ad e have small coefficients to enforce uniqueness)
+
+        - This is hard! 
+
+Why is this "Lattice" Cryptography?
+
+    - All solutions (y, e) to Ay + e = z mod p from a "shifted" lattice. We want to find the point closest to the origin
+
+CRYSTALS Math
+
+Operations: 
+
+    - Only two main operations needed (and both are very fast):
+        1. Evaluation of SHAKE256 (Can use XOF too)
+        2. Operations in the polynomial ring R = Zp[X]/(X^(256) + 1)
+            - prime p = 2^13 - 2^9 + 1 (for Kyber)
+            - prime p = 2^(23) - 2(13) + 1 (for Dilithium)
+    
+    - Ring Choice Rational
+        - 256-dimensional rings are "just right"
+            - Large enough to efficiently encrypt 256-bit keys
+            - Allow for a large nough chalenger space for signatures
+            - Allow for nough "granularity" to get the security we want
+        - Zp[X]/(X^n + 1), for a prime p, has the been the most widely-used ring in the literature
+    
+    - Each matrix entry is found in the polynomial ring Zp[x]/(x^(256) + 1) and the vector entries are polynomials with small coefficients so that we have a good balance between efficiency and security. The matrix dimensions are 768 or 1024 if we are looking to increase security
+
+        - The matrix is the public key, the secret keys are the vectors we are multiplying with the matrix and adding. The result is also public
 
 ## Dilithium (CRYSTALS-Dilithium)
 
@@ -279,7 +320,7 @@ Step 6 - Verification: Anyone with the public key (A, t1) can verify that a vali
 
 Critical Security Consideration - Side-channel resistance: Dilithium is designed to be implemented in constant time to prevent timing attacks. Operations like polynomial multiplication and rejection sampling must be performed without branching based on secret data. This is particularly important because the rejection sampling in signing could leak information about s1 if not implemented carefully.
 
-    - What is a timing-attack:
+    - What is a timing-attack: A timing attack is a security exploit where an attacker measures how long a computer system takes to respond to different inputs to guess secret data like passwords or encryption keys
 
 Output: A (z, c, h) signature that can be verified by anyone with the public key and message
 
@@ -344,6 +385,109 @@ Critical Security Consideration - Chosen ciphertext security: Kyber is designed 
 
 Output: A shared 256-bit symmetric key K that can be used for encryption, and a ciphertext (u, v) for transmission
 
-## CAST - Should I?
+## Quantum fourier transforms
 
-Overview:
+Overview: The Quantum Fourier Transform (QFT) is a linear transformation on quantum bits, and is the quantum analogue the Discrete Fourier Transform. The QFT is a part of many quantum algorithms, including Shor's algorithm for factoring and computing the discrete logarithm, the quantum phase estimation algorithm for estimating the eigenvalues of a unitary operator, and algorithms for the hidden subgroup problem. 
+
+    - Differences between QFT and DFT: The QFT acts on a quantum state vector while the classical DFT acts on a vector. In the classical case, the vector can be represented with an aray of floating point numbers and in the quantum case it is a sequence of probability amplitudes for all possible outcomes upon measurement (the outcomes are basis states, or eigenstates)
+
+Summarized definition: The Quantum Fourier Transform is the Discrete Fourier Transform applied to the vector of amplitudes of a quantum state, which has length N = 2^n if it is applied to a register of n qubits
+
+It acts on a state |x > = sum(j = 0, N - 1, xj|j)> and it maps to the quantum state |x > = sum(j = 0, N - 1, yj|j)> according to the formula:
+
+    yk = 1/sqrt(N) * sum(k = 0, N-1, xj * (wN)^jk), k = 0, 1, ..., N - 1
+
+        - Where wN = (e^(2pi*i)/N) is a Nth root of unity
+            - An Nth root of unity is a complexe number that when raised to the n equals 1 (where n is a positive integer)
+    
+Since w^jk is a rotation, the inverse QFT acts similarly but with:
+    
+    xj = 1/sqrt(N) * sum(k = 0, N-1, yk * (wN)^-jk), j = 0, 1, ..., N - 1
+
+What the QTF actually does: It transforms the input state in suh a way that the hidden phase information can be measured. It also requires many less gates (O(n^2)) compared to DFT (O(2^(2n))) and FFT (O(n2^n))
+
+## Shor's algorithm
+
+Overview: Shor's algorithm is a quantum algorithm for finding the prime factors of an integer. On a quantum computer, to factor an integer N, Shor's algorithm runs in polynomial time. Shor's algorithm requires millions of qubits to be truly effective and beat classical computers, for reference the quantum computers today only have a few thousand qubits
+
+    - What is at risk if a quantum computer with a suficient amount of bits is made? The problem Shor's algorithm solves is the discrete logarithm problem, and is able to solve it in polynomial time (O(n), O(n^2), etc). Thus any encryption algorithm, key exchange, or signature algorithm relying on a discrete logarithm problem is at risk. The following are the most prominent examples:
+        - RSA 
+        - Diffie-Hellman
+        - Elliptic Curve Diffie-Hellman
+        - Edwards 25519
+
+Input: A composite integer N to be factored 
+
+Step 1: Check if N is even, if it is then output 2 and exit 
+
+Step 2: Check if N = p^k for some prime p and integer k > 1; if yes, then output p and exit 
+
+    - How many primes do we check and for how many k's?
+        - We do not do any type of exhaustive search, we use an upper bound to solve for k. The smallest possible prime base is p = 2. Therefore, the absolute maximum power k could be is bounded by log2(N). So we only check integers in the range: 2 <= k <= [log2(N)]. For each candidate integer k in the range, we calculate the k-th root of N on a classical computer; p = N^(1/k). If p evaluates to a perfect integer, we then run a fast classical primality test (Miller-Rabin) on p, if p is prime then we have found our answer.
+
+Step 3: Pick a random integer a such that 2 <= a < N
+
+Step 4: Compute g = gcd(a, N) using the classical Euclidian algorithm
+
+Step 5: Check if g > 1; if yes, output g as a factor and exit 
+
+Step 6: Initialize Quantum Register 1 with t qubits to state |0>^(xor(t)) where 2^t >= N^2
+
+    - What is a Quantum Register?
+        - A Quantum Register is a collection of multiple qubits looked at together as a single system, used to store quantum information. A 3-bit classical register can hold exactly one binary number at a time. A 3-bit quantum register can hold a combination of all 8 possible 3-bit binary states simultaneously. Shor's algorithm uses two registers linked together through quantum entaglement, where register 1 holds the exponent x and register 2 holds the result of a^x mod N.
+
+            - What is a qubit? 
+                - A qubit is the basic unit of information in a quantum computer acting as the quantum counterpart to the classical bit. Instead of only being able to exist as either 0 or 1 like a classical bit, the qubit can exist as 0, 1, or both simultaneously via superposition
+            
+            - What is quantum information?
+                - Quantum information is information that is stored, processed, and manipulated using the unique laws of quantum machanics 
+                    - Probavilities and amplitudes: Instead of suing definite binary values, quantum information is when using complex numbers called amplitudes. These amplitudes describe the exact probability of what the system will do when measured.
+                    - No cloning theorem: A fundamental rule of quantum computing is that it cannot be perfectly copied or duplicated. Which makes quantum data secure under eavesdropping
+                    - Exponential scaling: While n classical bits store exactly one n-bit number, n qubits of quantum information can track 2^n configurations at the exact same time. Which is what makes Shor's algorithm so fast
+                
+            - What is quantum entanglement?
+                - Quantum entaglement is a phenomenon where two or more qubits become deeply linked, meaning the physical state of one qubit instantly dictates the state of the other, no matter how far apart they are 
+                    - Interdependant States: If two qubits are entangeled, you can no longer describe the state of one of the qubits independently of the other. They share a single, unified quantum existance. A common analogy is the twice die analogy; imagine rolling two classical dice in different cities, say one in Tokyo and one in New York, where their results are completely random and independent. If those dice were quantumly entangled, rolling a 5 in New York would force the die in Tokyo to land on a 5 every single time, even though no signal traveled in between them. 
+        
+    - What is "t" and why do we XOR it?
+        - The number "t" is the number of qubits allocated to register 1. We choose "t" such that 2^t >= N^2. 
+
+    - Why do we "XOR" t?
+        - We don't actually XOR it, we use quantum gates that behave the same as XOR'ing it. We do this because of the "quantum rule" which is that every operation on a uantum computer must be reversible, and the reverse of an XOR operation is simply XOR'ing it again.
+    
+    - Wouldnt Xoring 0 to the t simply give 0
+
+Step 7: Initialize Quantum Register 2 with m qubits to state |1> where 2^m >= N
+
+    - What is m?
+
+Step 8: Apply Hadamard gate to register 1 to create an equal superposition of all states from 0 to 2^t - 1
+
+    - What is a Hadamard Gate?
+        - A Hadamard Gate is a fundamental quantum logic gate that acts on a single qubit to create superposition. It takes a definite classical state and puts it into a perfectly balanced 50/50 superposition. If you pass a |0> through a Hadamard it becomes 1/(sqrt) * (|0> + |1>), if you pass a |1> through a Hadamard it becomes 1/(sqrt) * (|0> - |1>)
+    
+    - What is Superposition?
+        - Superposition is the ability of a quantum system to exist in multiple distinct states at the same time. A common analogy is comparing a bit to a coin lying flat on the table, it must be either heads or tails. A qubit in superposition is like a coin spinning on the table, it possesses a mathematical probability of landing on either state until it is stopped and forced to choose. While in superposition, a qubit is defined by a linear combination of its basis states: |phi> = alpha|0> + beta|1>, where alpha and beta are complex numbers representing probabilies and amplitudes.
+
+Step 9: Apply the quantum modular exponentiation oracle Uf to compute a^x mod N in Register 2
+
+    - What is the the "quantum modular exponentiation oracle Uf"?
+        - The quantum oracle is a specialized, custome-built quantum circuit that acts like a black-box mathematical function inside the computer. It takes the superposition of all numbers x in register 1 and simultaneously evaluates z^x mod N for every single value at the same time. Calaculating a^x directly for huge numbers is physically impossible because the numbers grow exponentially large. The quantum oracle takes an approach called "repeated squaring", instead of calculating massive powers all at once, it breaks the exponent x down to its binary bits (x0, x1, x2, ...) and chains them into smaller, controlled modular multiplication gates:
+            - a^x mod N = (a^1)^x0 * (a^2)^x1 * (a^3)^x2 ... mod N, handling the math bit-by-bit keeps it manageable
+
+Step 10: Measure Register 2 to collapse Register 1 into periodic superposition matching one random remainder
+
+Step 11: Apply the Inverse Quantum Fourier Transform (IQFT) to Register 1 to transform period spacing into frequency peaks
+
+Step 12: Measure Register 1 to obtain a classical integer value y
+
+Step 13: Apply the classical Continued Functions Algorithm to the fraction y/(2^t) to find a candidate period r 
+
+    - What is the Continued Functions Algorithm?
+        - The Continued Functions Algorithm is a classical mathematical tool used to turn any decimal fraction into a sequence of of nested fractions to find its best possible rational approximation (s/r)
+
+Step 14: Check if r is odd or if a^(r/2) == -1 mod N (mod inverse); if either is true, restart completely from step 3
+
+Step 15: Compute the non-trivial factor p = gcd(a^(r/2) - 1, N)
+
+Output: The prime factors p and q = N/p

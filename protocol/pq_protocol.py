@@ -12,8 +12,8 @@ try:
 except ImportError:
     _HAVE_OQS = False
 
-SIG_ALG = "Dilithium3"     # replaces Ed25519
 KEM_ALG = "Kyber768"       # replaces classical Diffie-Hellman
+SIG_ALG = "ML-DSA-65"     # replaces Ed25519
 
 def _is_probable_prime(n: int, rounds: int = 40) -> bool:
     if n < 2:
