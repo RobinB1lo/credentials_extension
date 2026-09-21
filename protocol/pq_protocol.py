@@ -5,15 +5,11 @@ from cryptography.hazmat.primitives import hashes
 import hashlib
 import secrets
 import os
-
-try:
-    import oqs  # liboqs-python: provides Dilithium (sig) and Kyber (KEM)
-    _HAVE_OQS = True
-except ImportError:
-    _HAVE_OQS = False
+import oqs
 
 KEM_ALG = "Kyber768"       # replaces classical Diffie-Hellman
 SIG_ALG = "ML-DSA-65"     # replaces Ed25519
+
 
 def _is_probable_prime(n: int, rounds: int = 40) -> bool:
     if n < 2:
@@ -98,8 +94,6 @@ class Protocol:
 class Issuer:
     """Now signs credentials with Dilithium instead of Ed25519."""
     def __init__(self) -> None:
-        if not _HAVE_OQS:
-            raise RuntimeError("pip install liboqs-python to use signatures")
         self.signer = oqs.Signature(SIG_ALG)
         self.pk = self.signer.generate_keypair()  # public key bytes
 
@@ -155,11 +149,10 @@ class Alice:
         self.x3 = x3
         self.alpha = alpha
         self.cred = self.compute_credential(x1, x2, x3, alpha)
-        if _HAVE_OQS:
-            self.sig = oqs.Signature(SIG_ALG)
-            self.pk = self.sig.generate_keypair()
-            self.kem = oqs.KeyEncapsulation(KEM_ALG)
-            self.kem_pub = self.kem.generate_keypair()  # sent to Bob
+        self.sig = oqs.Signature(SIG_ALG)
+        self.pk = self.sig.generate_keypair()
+        self.kem = oqs.KeyEncapsulation(KEM_ALG)
+        self.kem_pub = self.kem.generate_keypair()  # sent to Bob
 
     def decapsulate(self, ciphertext: bytes) -> bytes:
         return self.kem.decap_secret(ciphertext)
@@ -190,11 +183,10 @@ class Bob:
     def __init__(self, protocol: Protocol, x2: int, alice_kem_pub: bytes) -> None:
         self.protocol = protocol
         self.x2 = x2
-        if _HAVE_OQS:
-            self.sig = oqs.Signature(SIG_ALG)
-            self.pk = self.sig.generate_keypair()
-            with oqs.KeyEncapsulation(KEM_ALG) as encapper:
-                self.kem_ct, self.shared_secret = encapper.encap_secret(alice_kem_pub)
+        self.sig = oqs.Signature(SIG_ALG)
+        self.pk = self.sig.generate_keypair()
+        with oqs.KeyEncapsulation(KEM_ALG) as encapper:
+            self.kem_ct, self.shared_secret = encapper.encap_secret(alice_kem_pub)
 
     def verify_credential(self, cred: int, sig: bytes, issuer_pk: bytes) -> bool:
         return verify_signature(_canon(cred, self.protocol.p), sig, issuer_pk)

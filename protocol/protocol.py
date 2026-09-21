@@ -226,7 +226,7 @@ if __name__ == "__main__":
     proto = Protocol(p, q, g1, g2, g3, h0)
 
     # === Alice's answer (hashed to field) ===
-    correct_answer_str = "send list"
+    correct_answer_str = "Once upon a time there was a safe blockchain"
     correct_x2 = answer_to_field(correct_answer_str, q)  # SHA-256 hash to field
     
     # === Consistent-length answers (also hashed) ===
@@ -240,8 +240,8 @@ if __name__ == "__main__":
     issuer = Issuer()
     cred_sig = issuer.sign_credential(alice.cred, p)
 
-    for label, bob_answer_str in (("correct (send list)", "send list"), 
-                                   ("wrong (send Mike)", "send Mike")):
+    for label, bob_answer_str in (("correct (Once upon a time there was a safe blockchain)", "Once upon a time there was a safe blockchain"), 
+                                   ("wrong (Once upon a time there was no blockchain)", "Once upon a time there was no blockchain")):
         bob_x2 = answer_to_field(bob_answer_str, q)  # Bob hashes his answer
         b = secrets.randbelow(q)
         bob = Bob(proto, b=b, g=g, x2=bob_x2)
